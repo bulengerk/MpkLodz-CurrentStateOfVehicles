@@ -1,0 +1,13 @@
+{
+  "name": "mpk_visualization_realtime_node",
+  "version": "1.0.0",
+  "description": "Real‑time MPK Łódź vehicle positions visualised on a Leaflet map using Node.js",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "gtfs-realtime-bindings": "^1.1.1"
+  }
+}

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MPK Łódź – Pozycje pojazdów w czasie rzeczywistym</title>
+  <!-- Leaflet CSS -->
+  <!-- Ładuj arkusz stylów Leaflet bez atrybutów SRI, aby uniknąć problemów z
+       weryfikacją integralności w środowiskach z ograniczonym dostępem do sieci. -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body, #map {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- Leaflet JS -->
+  <!-- Ładuj bibliotekę Leaflet bez atrybutów SRI i CORS.  Ułatwia to pobieranie
+       w przypadku zapór ogniowych lub serwerów CDN modyfikujących treść. -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // Initialise the map centred on Łódź.  You can adjust the zoom level to
+    // display a larger or smaller area by default.
+    const map = L.map('map').setView([51.759, 19.458], 12);
+    
+    // Add a tile layer.  OpenStreetMap tiles are free to use.  You can
+    // substitute another provider if desired (e.g. CartoDB, MapTiler, etc.).
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a> contributors'
+    }).addTo(map);
+
+    // Maintain a lookup of markers by vehicle identifier so they can be
+    // efficiently updated rather than recreated on each refresh.
+    const markers = {};
+
+    /**
+     * Fetch the latest vehicle positions from the server and update markers on
+     * the map accordingly.  New markers are added for vehicles we haven't
+     * seen before and existing markers are moved to their new locations.
+     */
+    async function updatePositions() {
+      try {
+        const res = await fetch('/positions');
+        const data = await res.json();
+        if (!Array.isArray(data)) return;
+        data.forEach(vehicle => {
+          const key = vehicle.id || vehicle.label || `${vehicle.lat},${vehicle.lon}`;
+          if (!key) return;
+          const latlng = [vehicle.lat, vehicle.lon];
+          if (markers[key]) {
+            markers[key].setLatLng(latlng);
+          } else {
+            const marker = L.circleMarker(latlng, {
+              radius: 6,
+              color: '#e53935',
+              weight: 2,
+              fillColor: '#e57373',
+              fillOpacity: 0.8
+            });
+            const popupContent = [];
+            if (vehicle.routeId) popupContent.push(`<strong>Linia:</strong> ${vehicle.routeId}`);
+            if (vehicle.tripId) popupContent.push(`<strong>Trip:</strong> ${vehicle.tripId}`);
+            if (vehicle.timestamp) {
+              const date = new Date(vehicle.timestamp);
+              popupContent.push(`<strong>Czas:</strong> ${date.toLocaleTimeString()}`);
+            }
+            marker.bindPopup(popupContent.join('<br>'));
+            marker.addTo(map);
+            markers[key] = marker;
+          }
+        });
+      } catch (err) {
+        console.error('Błąd podczas pobierania pozycji pojazdów:', err);
+      }
+    }
+
+    // Immediately fetch and display positions, then refresh every 15 seconds.
+    updatePositions();
+    setInterval(updatePositions, 15000);
+  </script>
+</body>
+</html>
