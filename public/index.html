@@ -66,7 +66,9 @@
 
     const markers = {};
     const refreshInfo = document.getElementById('refresh-info');
-    const REFRESH_INTERVAL_MS = 15000;
+    const DEFAULT_INTERVAL_MS = 15000;
+    const FOCUSED_INTERVAL_MS = 5000;
+    let refreshTimer = null;
 
     const busSvg = `<?xml version='1.0' encoding='UTF-8'?><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='g' x1='0%' y1='0%' x2='0%' y2='100%'><stop offset='0%' stop-color='#d84315'/><stop offset='100%' stop-color='#bf360c'/></linearGradient></defs><rect x='10' y='14' width='44' height='30' rx='8' ry='8' fill='url(#g)' stroke='#431000' stroke-width='2'/><rect x='16' y='18' width='32' height='14' rx='2' fill='#ffe0b2'/><rect x='16' y='35' width='8' height='6' rx='1' fill='#212121'/><rect x='40' y='35' width='8' height='6' rx='1' fill='#212121'/><circle cx='20' cy='49' r='5' fill='#263238'/><circle cx='44' cy='49' r='5' fill='#263238'/><rect x='24' y='8' width='16' height='4' rx='2' fill='#431000'/></svg>`;
 
@@ -101,18 +103,39 @@
       return isTram(vehicle) ? tramIcon : busIcon;
     }
 
-    function formatRefreshInfo(lastSuccess) {
-      const seconds = Math.round(REFRESH_INTERVAL_MS / 1000);
-      const base = `Odświeżanie mapy: co ${seconds} s`;
-      if (!lastSuccess) return `${base} | ostatnia aktualizacja: oczekiwanie…`;
-      return `${base} | ostatnia aktualizacja: ${lastSuccess.toLocaleTimeString('pl-PL')}`;
+    function currentInterval() {
+      const zoom = map.getZoom();
+      return zoom >= 15 ? FOCUSED_INTERVAL_MS : DEFAULT_INTERVAL_MS;
+    }
+
+    function formatRefreshInfo(lastSuccess, interval, statusText) {
+      const seconds = Math.round(interval / 1000);
+      let text = `Odświeżanie mapy: co ${seconds} s`;
+      if (!lastSuccess) {
+        text += ' | ostatnia aktualizacja: oczekiwanie…';
+      } else {
+        text += ` | ostatnia aktualizacja: ${lastSuccess.toLocaleTimeString('pl-PL')}`;
+      }
+      if (statusText) {
+        text += ` | ${statusText}`;
+      }
+      return text;
+    }
+
+    function scheduleNextUpdate() {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      refreshTimer = setTimeout(updatePositions, currentInterval());
     }
 
     let lastSuccessfulUpdate = null;
-    refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate);
+    refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval());
 
     async function updatePositions() {
       try {
+        const interval = currentInterval();
+        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval, 'pobieranie…');
         const res = await fetch('/positions');
         const data = await res.json();
         if (!Array.isArray(data)) return;
@@ -139,15 +162,21 @@
           }
         });
         lastSuccessfulUpdate = new Date();
-        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate);
+        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval);
       } catch (err) {
         console.error('Błąd podczas pobierania pozycji pojazdów:', err);
-        refreshInfo.textContent = `${formatRefreshInfo(lastSuccessfulUpdate)} | błąd pobierania`;
+        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'błąd pobierania');
+      } finally {
+        scheduleNextUpdate();
       }
     }
 
+    map.on('zoomend', () => {
+      refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval());
+      scheduleNextUpdate();
+    });
+
     updatePositions();
-    setInterval(updatePositions, REFRESH_INTERVAL_MS);
   </script>
 </body>
 </html>
