@@ -23,16 +23,10 @@
     }
 
     #refresh-info {
-      position: fixed;
-      top: 16px;
-      right: 16px;
-      z-index: 1000;
-      padding: 8px 12px;
-      background: rgba(33, 33, 33, 0.85);
-      color: #fff;
-      border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-      font-size: 14px;
+      display: block;
+      margin-top: 4px;
+      font-size: 11px;
+      color: #37474f;
       letter-spacing: 0.2px;
     }
 
@@ -139,10 +133,10 @@
       #controls button {
         width: 100%;
       }
-      #refresh-info {
+      #data-attribution {
         left: 16px;
         right: 16px;
-        top: 96px;
+        bottom: 12px;
         text-align: center;
       }
     }
@@ -159,6 +153,7 @@
       font-size: 11px;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
       line-height: 1.4;
+      text-align: right;
     }
 
     #data-attribution a {
@@ -180,8 +175,10 @@
     <button id="locate-user" type="button">Lokalizuj</button>
   </div>
   <div id="map"></div>
-  <div id="refresh-info">Ładowanie danych pojazdów…</div>
-  <div id="data-attribution">Dane: <a href="https://otwarte.miasto.lodz.pl/" target="_blank" rel="noopener">otwarte.miasto.lodz.pl</a></div>
+  <div id="data-attribution">
+    Dane: <a href="https://otwarte.miasto.lodz.pl/" target="_blank" rel="noopener">otwarte.miasto.lodz.pl</a><br>
+    <span id="refresh-info">Ładowanie danych pojazdów…</span>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
@@ -232,6 +229,19 @@
 
     function normalizeRoute(value) {
       return (value || '').toString().trim().toUpperCase();
+    }
+
+    function extractDirection(vehicle) {
+      if (!vehicle) return '';
+      const headsign = vehicle.headsign
+        || (vehicle.trip && (vehicle.trip.tripHeadsign
+          || vehicle.trip.trip_headsign
+          || vehicle.trip.headsign
+          || vehicle.trip.tripDestination
+          || vehicle.trip.destination))
+        || null;
+      if (!headsign) return '';
+      return headsign.toString().trim();
     }
 
     function possibleRoutesFromLabel(value) {
@@ -634,6 +644,8 @@
         const iconData = iconForVehicle(vehicle);
         const popupParts = [];
         if (vehicle.routeId) popupParts.push(`<strong>Linia:</strong> ${vehicle.routeId}`);
+        const direction = extractDirection(vehicle);
+        if (direction) popupParts.push(`<strong>Kierunek:</strong> ${direction}`);
         if (vehicle.tripId) popupParts.push(`<strong>Trip:</strong> ${vehicle.tripId}`);
         if (vehicle.timestamp) {
           const date = new Date(vehicle.timestamp);
@@ -641,6 +653,9 @@
         }
         const popupHtml = popupParts.join('<br>');
         const matchesFilter = matchesActiveFilter(vehicle);
+        const tooltipText = iconData.label
+          ? direction ? `Linia ${iconData.label} – ${direction}` : `Linia ${iconData.label}`
+          : direction || '';
         const sampleTimestamp = vehicleTimestampMs(vehicle, Date.now());
         const existing = markers[key];
 
@@ -651,13 +666,14 @@
             existing.iconKey = iconData.key;
           }
           updateMarkerHeading(existing, vehicle.bearing);
-          if (existing.routeLabel !== iconData.label) {
-            if (iconData.label) {
-              existing.marker.bindTooltip(`Linia ${iconData.label}`, ROUTE_TOOLTIP_OPTIONS);
+          if (existing.routeLabel !== iconData.label || existing.tooltipText !== tooltipText) {
+            if (tooltipText) {
+              existing.marker.bindTooltip(tooltipText, ROUTE_TOOLTIP_OPTIONS);
             } else if (existing.marker.getTooltip()) {
               existing.marker.unbindTooltip();
             }
             existing.routeLabel = iconData.label;
+            existing.tooltipText = tooltipText;
           }
           if (existing.popupHtml !== popupHtml) {
             const popup = existing.marker.getPopup();
@@ -684,8 +700,8 @@
         if (popupHtml) {
           marker.bindPopup(popupHtml);
         }
-        if (iconData.label) {
-          marker.bindTooltip(`Linia ${iconData.label}`, ROUTE_TOOLTIP_OPTIONS);
+        if (tooltipText) {
+          marker.bindTooltip(tooltipText, ROUTE_TOOLTIP_OPTIONS);
         }
         const entry = {
           marker,
@@ -694,6 +710,7 @@
           lastVehicle: vehicle,
           iconKey: iconData.key,
           routeLabel: iconData.label,
+          tooltipText,
           popupHtml,
           sampleTimestamp: undefined,
           motion: null,

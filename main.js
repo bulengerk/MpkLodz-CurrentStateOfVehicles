@@ -66,6 +66,17 @@ async function updateFeed() {
         if (!vehicle || !vehicle.position || vehicle.position.latitude == null || vehicle.position.longitude == null) {
           continue;
         }
+        const trip = vehicle.trip || {};
+        const headsign = trip.tripHeadsign
+          || trip.trip_headsign
+          || trip.headsign
+          || trip.tripHeadsignText
+          || trip.trip_headsign_text
+          || trip.destination
+          || trip.tripDestination
+          || null;
+        const directionId = trip.directionId;
+        const legacyDirectionId = trip.direction_id;
         positions.push({
           id: (vehicle.vehicle && (vehicle.vehicle.id || vehicle.vehicle.label)) || entity.id || null,
           label: vehicle.vehicle ? vehicle.vehicle.label : null,
@@ -75,7 +86,9 @@ async function updateFeed() {
           speed: vehicle.position.speed || null,
           routeId: vehicle.trip ? (vehicle.trip.routeId || vehicle.trip.route_id) : null,
           tripId: vehicle.trip ? (vehicle.trip.tripId || vehicle.trip.trip_id) : null,
-          timestamp: vehicle.timestamp ? Number(vehicle.timestamp) * 1000 : null
+          timestamp: vehicle.timestamp ? Number(vehicle.timestamp) * 1000 : null,
+          headsign,
+          directionId: directionId != null ? directionId : legacyDirectionId != null ? legacyDirectionId : null
         });
       }
       vehicles = positions;
