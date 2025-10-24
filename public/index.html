@@ -44,6 +44,7 @@
       display: flex;
       gap: 8px;
       align-items: center;
+      flex-wrap: wrap;
       padding: 10px 12px;
       background: rgba(255, 255, 255, 0.95);
       border-radius: 8px;
@@ -119,6 +120,37 @@
     .map-show-route-labels .route-label {
       display: inline-block;
     }
+
+    #footer {
+      position: fixed;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 6px 12px;
+      background: rgba(33, 33, 33, 0.85);
+      color: #fff;
+      border-radius: 12px;
+      font-size: 13px;
+      letter-spacing: 0.3px;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    }
+
+    #perf-panel {
+      position: fixed;
+      bottom: 12px;
+      right: 16px;
+      padding: 6px 10px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.35;
+      z-index: 1000;
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      min-width: 140px;
+    }
   </style>
 </head>
 <body>
@@ -126,9 +158,12 @@
     <label for="route-filter">Pokaż linię</label>
     <input id="route-filter" type="text" placeholder="np. 52 lub 1" autocomplete="off">
     <button id="clear-route-filter" type="button">Pokaż wszystkie</button>
+    <button id="toggle-profiler" type="button">Profiling: off</button>
   </div>
   <div id="map"></div>
   <div id="refresh-info">Ładowanie danych pojazdów…</div>
+  <div id="perf-panel" hidden></div>
+  <div id="footer">Gwarancja do bramy i sie nie znamy, Bułek  2025</div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
@@ -142,14 +177,34 @@
     const refreshInfo = document.getElementById('refresh-info');
     const routeFilterInput = document.getElementById('route-filter');
     const clearFilterButton = document.getElementById('clear-route-filter');
-    const DEFAULT_INTERVAL_MS = 15000;
-    const FOCUSED_INTERVAL_MS = 5000;
+    const toggleProfilerButton = document.getElementById('toggle-profiler');
+    const perfPanel = document.getElementById('perf-panel');
+    const DEFAULT_INTERVAL_MS = 14000;
+    const FOCUSED_INTERVAL_MS = 3000;
+    const FILTERED_INTERVAL_MS = 2500;
     const LABEL_ZOOM_THRESHOLD = 15;
+    const MOTION_MIN_DURATION_MS = 500;
+    const MOTION_MAX_DURATION_MS = 9000;
+    const MOTION_PROJECTION_MS = 12000;
+    const MOTION_PROJECTION_FACTOR = 3;
+    const MOTION_MAX_PROJECTION_MS = 20000;
     let refreshTimer = null;
     let isFetching = false;
     let pendingImmediateUpdate = false;
     let activeRouteFilter = '';
     let activeRouteFilterLabel = '';
+    let lastPayload = null;
+    let lastETag = null;
+    let lastServerTimestamp = null;
+    let profilerEnabled = false;
+    const perfState = {
+      enabled: false,
+      fps: 0,
+      frameSamples: 0,
+      lastFrameSampleTime: performance.now(),
+      fetchMs: null,
+      lastDataAgeMs: null
+    };
     const raf = window.requestAnimationFrame
       ? window.requestAnimationFrame.bind(window)
       : (callback) => setTimeout(() => callback(Date.now()), 16);
@@ -162,6 +217,7 @@
       opacity: 0.85,
       sticky: false
     };
+    const iconCache = new Map();
 
     function normalizeRoute(value) {
       return (value || '').toString().trim().toUpperCase();
@@ -194,19 +250,19 @@
       if (shouldShow) {
         if (!entry.isVisible) {
           entry.marker.addTo(map);
-          entry.isVisible = true;
-          if (entry.lastLatLng) {
-            entry.marker.setLatLng([entry.lastLatLng.lat, entry.lastLatLng.lng]);
+          const visibleLatLng = currentLatLng(entry);
+          if (visibleLatLng) {
+            entry.marker.setLatLng([visibleLatLng.lat, visibleLatLng.lng]);
           }
         }
+        entry.isVisible = true;
         return;
       }
 
-      if (entry.isVisible !== false) {
-        cancelAnimation(entry);
+      if (entry.isVisible) {
         entry.marker.remove();
-        entry.isVisible = false;
       }
+      entry.isVisible = false;
     }
 
     function applyFilterToExistingMarkers() {
@@ -228,23 +284,50 @@
       if (!isFetching) updatePositions();
     }
 
+    function updatePerfPanel() {
+      if (!profilerEnabled) return;
+      const fpsText = perfState.fps ? `${perfState.fps} fps` : 'n/a';
+      const fetchText = perfState.fetchMs != null ? `${Math.round(perfState.fetchMs)} ms` : 'n/a';
+      const ageText = perfState.lastDataAgeMs != null ? `${Math.round(perfState.lastDataAgeMs)} ms` : 'n/a';
+      perfPanel.innerHTML = `FPS: ${fpsText}<br>Pobranie: ${fetchText}<br>Wiek danych: ${ageText}`;
+    }
+
+    function recordAnimationFrame() {
+      if (!profilerEnabled) return;
+      const now = performance.now();
+      perfState.frameSamples += 1;
+      const elapsed = now - perfState.lastFrameSampleTime;
+      if (elapsed >= 1000) {
+        perfState.fps = Math.round((perfState.frameSamples * 1000) / elapsed);
+        perfState.frameSamples = 0;
+        perfState.lastFrameSampleTime = now;
+        updatePerfPanel();
+      }
+    }
+
     const busSvg = `<?xml version='1.0' encoding='UTF-8'?><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='10' y='14' width='44' height='32' rx='10' ry='10' fill='#c62828' stroke='#5d1010' stroke-width='2'/><rect x='16' y='18' width='32' height='14' rx='3' fill='#fbe9e7'/><rect x='14' y='34' width='36' height='8' rx='3' fill='#6d4c41'/><circle cx='22' cy='50' r='6' fill='#263238'/><circle cx='42' cy='50' r='6' fill='#263238'/><rect x='24' y='8' width='16' height='4' rx='2' fill='#5d1010'/><circle cx='18' cy='30' r='3' fill='#ffab40'/><circle cx='46' cy='30' r='3' fill='#ffab40'/></svg>`;
 
     const tramSvg = `<?xml version='1.0' encoding='UTF-8'?><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='12' y='16' width='40' height='28' rx='12' ry='12' fill='#1565c0' stroke='#0d47a1' stroke-width='2'/><rect x='18' y='20' width='28' height='12' rx='3' fill='#e3f2fd'/><rect x='20' y='34' width='24' height='6' rx='2' fill='#1e88e5'/><circle cx='22' cy='50' r='5' fill='#212121'/><circle cx='42' cy='50' r='5' fill='#212121'/><rect x='28' y='10' width='8' height='6' rx='3' fill='#0d47a1'/><path d='M18 52h28' stroke='#90a4ae' stroke-width='3' stroke-linecap='round'/></svg>`;
 
-    function createVehicleIcon(vehicle) {
+    function getVehicleIcon(vehicle) {
       const isTramVehicle = isTram(vehicle);
       const type = isTramVehicle ? 'tram' : 'bus';
       const svgMarkup = isTramVehicle ? tramSvg : busSvg;
       const label = deriveRouteLabel(vehicle);
+      const cacheKey = `${type}|${label}`;
+      if (iconCache.has(cacheKey)) {
+        return { icon: iconCache.get(cacheKey), key: cacheKey, label };
+      }
       const labelHtml = label ? `<span class="route-label">${label}</span>` : '';
-      return L.divIcon({
+      const icon = L.divIcon({
         html: `<div class="vehicle-marker ${type}"><div class="vehicle-icon">${svgMarkup}</div>${labelHtml}</div>`,
         className: '',
         iconSize: [36, 48],
         iconAnchor: [18, 24],
         popupAnchor: [0, -24]
       });
+      iconCache.set(cacheKey, icon);
+      return { icon, key: cacheKey, label };
     }
 
     const TRAM_ROUTES = new Set([
@@ -260,12 +343,130 @@
     }
 
     function iconForVehicle(vehicle) {
-      return createVehicleIcon(vehicle);
+      return getVehicleIcon(vehicle);
     }
 
+    function vehicleTimestampMs(vehicle, fallback) {
+      if (!vehicle.timestamp) return fallback;
+      const numeric = Number(vehicle.timestamp);
+      if (Number.isFinite(numeric)) {
+        if (numeric > 1e12) return numeric;
+        if (numeric > 1e9) return numeric * 1000;
+      }
+      const parsed = Date.parse(vehicle.timestamp);
+      return Number.isNaN(parsed) ? fallback : parsed;
+    }
+
+    function clamp01(value) {
+      return Math.min(1, Math.max(0, value));
+    }
+
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function durationForMotion(previousTimestamp, sampleTimestamp, fallbackDuration) {
+      if (!previousTimestamp || !Number.isFinite(previousTimestamp)) {
+        return fallbackDuration;
+      }
+      const delta = sampleTimestamp - previousTimestamp;
+      if (!Number.isFinite(delta) || delta <= 0) {
+        return fallbackDuration;
+      }
+      return Math.min(MOTION_MAX_DURATION_MS, Math.max(MOTION_MIN_DURATION_MS, delta));
+    }
+
+    function currentLatLng(entry) {
+      if (entry.motion && entry.motion.currentLatLng) return entry.motion.currentLatLng;
+      if (entry.lastLatLng) return entry.lastLatLng;
+      if (!entry.marker) return null;
+      const markerLatLng = entry.marker.getLatLng();
+      return markerLatLng ? { lat: markerLatLng.lat, lng: markerLatLng.lng } : null;
+    }
+
+    function scheduleMotion(entry, targetLatLng, sampleTimestamp, previousSampleTimestamp, intervalMs) {
+      const now = Date.now();
+      const startLatLng = currentLatLng(entry) || { lat: targetLatLng[0], lng: targetLatLng[1] };
+      const fallbackDuration = Math.min(MOTION_MAX_DURATION_MS, Math.max(MOTION_MIN_DURATION_MS, intervalMs));
+      const duration = durationForMotion(previousSampleTimestamp, sampleTimestamp, fallbackDuration);
+      const targetTimeMs = now + duration;
+      const projectionWindow = Math.min(
+        MOTION_MAX_PROJECTION_MS,
+        Math.max(MOTION_PROJECTION_MS, Math.max(MOTION_MIN_DURATION_MS, intervalMs) * MOTION_PROJECTION_FACTOR)
+      );
+      const velocity = duration > 0
+        ? {
+            latPerMs: (targetLatLng[0] - startLatLng.lat) / duration,
+            lngPerMs: (targetLatLng[1] - startLatLng.lng) / duration
+          }
+        : { latPerMs: 0, lngPerMs: 0 };
+      entry.motion = {
+        startLatLng,
+        targetLatLng: { lat: targetLatLng[0], lng: targetLatLng[1] },
+        startTimeMs: now,
+        targetTimeMs,
+        velocity,
+        projectionMs: projectionWindow,
+        currentLatLng: { lat: startLatLng.lat, lng: startLatLng.lng }
+      };
+      ensureAnimationLoop();
+    }
+
+    let animationHandle = null;
+
+    function ensureAnimationLoop() {
+      if (animationHandle !== null) return;
+      animationHandle = raf(stepAnimations);
+    }
+
+    function stepAnimations() {
+      const now = Date.now();
+      let shouldContinue = false;
+      recordAnimationFrame();
+      Object.values(markers).forEach(entry => {
+        if (!entry.motion) return;
+        const motion = entry.motion;
+        const { startLatLng, targetLatLng, startTimeMs, targetTimeMs, velocity, projectionMs } = motion;
+        let lat;
+        let lng;
+        if (now <= targetTimeMs) {
+          const span = targetTimeMs - startTimeMs || 1;
+          const t = clamp01((now - startTimeMs) / span);
+          const eased = easeInOutCubic(t);
+          lat = startLatLng.lat + (targetLatLng.lat - startLatLng.lat) * eased;
+          lng = startLatLng.lng + (targetLatLng.lng - startLatLng.lng) * eased;
+          shouldContinue = true;
+        } else {
+          const overshoot = Math.min(now - targetTimeMs, projectionMs);
+          lat = targetLatLng.lat + velocity.latPerMs * overshoot;
+          lng = targetLatLng.lng + velocity.lngPerMs * overshoot;
+          if (overshoot < projectionMs && (Math.abs(velocity.latPerMs) > 1e-7 || Math.abs(velocity.lngPerMs) > 1e-7)) {
+            shouldContinue = true;
+          }
+          if (overshoot >= projectionMs || (Math.abs(velocity.latPerMs) < 1e-7 && Math.abs(velocity.lngPerMs) < 1e-7)) {
+            entry.motion = null;
+          }
+        }
+        motion.currentLatLng = { lat, lng };
+        motion.currentTimeMs = now;
+        entry.lastLatLng = { lat, lng };
+        if (entry.isVisible !== false) {
+          entry.marker.setLatLng([lat, lng]);
+        }
+      });
+      if (shouldContinue) {
+        animationHandle = raf(stepAnimations);
+      } else {
+        animationHandle = null;
+      }
+    }
     function currentInterval() {
       const zoom = map.getZoom();
-      return zoom >= 15 ? FOCUSED_INTERVAL_MS : DEFAULT_INTERVAL_MS;
+      let interval = zoom >= LABEL_ZOOM_THRESHOLD ? FOCUSED_INTERVAL_MS : DEFAULT_INTERVAL_MS;
+      if (activeRouteFilter) {
+        interval = Math.min(interval, FILTERED_INTERVAL_MS);
+      }
+      return interval;
     }
 
     function updateRouteLabelVisibility() {
@@ -302,56 +503,6 @@
       refreshTimer = setTimeout(updatePositions, currentInterval());
     }
 
-    function shouldAnimate() {
-      return map.getZoom() >= 15;
-    }
-
-    function cancelAnimation(entry) {
-      if (entry.animationFrame) {
-        caf(entry.animationFrame);
-        entry.animationFrame = null;
-      }
-    }
-
-    function animateMarker(entry, targetLatLng, interval) {
-      cancelAnimation(entry);
-      const startLatLng = entry.lastLatLng
-        ? L.latLng(entry.lastLatLng.lat, entry.lastLatLng.lng)
-        : entry.marker.getLatLng();
-      const target = L.latLng(targetLatLng[0], targetLatLng[1]);
-      const distanceMeters = map.distance(startLatLng, target);
-      const minDuration = 600;
-      const maxDuration = Math.min(Math.max(interval - 400, minDuration), 6000);
-      const distanceDuration = (distanceMeters / 25) * 1000; // ~25 m/s cap
-      const duration = Math.min(maxDuration, Math.max(minDuration, distanceDuration || minDuration));
-      let startTime = null;
-
-      function step(now) {
-        if (startTime === null) startTime = now;
-        const elapsed = now - startTime;
-        const t = Math.min(1, elapsed / duration);
-        const ease = t;
-        const lat = startLatLng.lat + (target.lat - startLatLng.lat) * ease;
-        const lng = startLatLng.lng + (target.lng - startLatLng.lng) * ease;
-        entry.marker.setLatLng([lat, lng]);
-        if (t < 1 && shouldAnimate()) {
-          entry.animationFrame = raf(step);
-        } else {
-          entry.animationFrame = null;
-          entry.lastLatLng = { lat: target.lat, lng: target.lng };
-          entry.marker.setLatLng(targetLatLng);
-        }
-      }
-
-      if (!shouldAnimate()) {
-        entry.marker.setLatLng(targetLatLng);
-        entry.lastLatLng = { lat: target.lat, lng: target.lng };
-        return;
-      }
-
-      entry.animationFrame = raf(step);
-    }
-
     let lastSuccessfulUpdate = null;
     refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval());
     updateRouteLabelVisibility();
@@ -379,42 +530,60 @@
       routeFilterInput.focus();
     });
 
-    async function updatePositions() {
-      if (isFetching) {
-        pendingImmediateUpdate = true;
-        return;
+    toggleProfilerButton.addEventListener('click', () => {
+      profilerEnabled = !profilerEnabled;
+      perfState.enabled = profilerEnabled;
+      perfState.frameSamples = 0;
+      perfState.lastFrameSampleTime = performance.now();
+      if (!profilerEnabled) {
+        perfPanel.hidden = true;
+        perfState.fps = 0;
+        perfState.fetchMs = null;
+        perfState.lastDataAgeMs = null;
+      } else {
+        perfPanel.hidden = false;
+        updatePerfPanel();
       }
-      isFetching = true;
-      const interval = currentInterval();
-      refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval, 'pobieranie…');
-      try {
-        const res = await fetch(`/positions?ts=${Date.now()}`, { cache: 'no-store' });
-        const data = await res.json();
-        if (!Array.isArray(data)) return;
-        data.forEach(vehicle => {
-          const key = vehicle.id || vehicle.label || `${vehicle.lat},${vehicle.lon}`;
-          if (!key) return;
-          const latlng = [vehicle.lat, vehicle.lon];
-          const routeLabel = deriveRouteLabel(vehicle);
-          const icon = iconForVehicle(vehicle);
-          const popupParts = [];
-          if (vehicle.routeId) popupParts.push(`<strong>Linia:</strong> ${vehicle.routeId}`);
-          if (vehicle.tripId) popupParts.push(`<strong>Trip:</strong> ${vehicle.tripId}`);
-          if (vehicle.timestamp) {
-            const date = new Date(vehicle.timestamp);
-            popupParts.push(`<strong>Czas:</strong> ${date.toLocaleTimeString('pl-PL')}`);
+      toggleProfilerButton.textContent = profilerEnabled ? 'Profiling: on' : 'Profiling: off';
+    });
+
+    function applyPositions(data, interval) {
+      if (!Array.isArray(data)) return;
+      data.forEach(vehicle => {
+        const key = vehicle.id || vehicle.label || `${vehicle.lat},${vehicle.lon}`;
+        if (!key) return;
+        const lat = Number(vehicle.lat);
+        const lon = Number(vehicle.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+        const latlng = [lat, lon];
+        const iconData = iconForVehicle(vehicle);
+        const popupParts = [];
+        if (vehicle.routeId) popupParts.push(`<strong>Linia:</strong> ${vehicle.routeId}`);
+        if (vehicle.tripId) popupParts.push(`<strong>Trip:</strong> ${vehicle.tripId}`);
+        if (vehicle.timestamp) {
+          const date = new Date(vehicle.timestamp);
+          popupParts.push(`<strong>Czas:</strong> ${date.toLocaleTimeString('pl-PL')}`);
+        }
+        const popupHtml = popupParts.join('<br>');
+        const matchesFilter = matchesActiveFilter(vehicle);
+        const sampleTimestamp = vehicleTimestampMs(vehicle, Date.now());
+        const existing = markers[key];
+
+        if (existing) {
+          existing.lastVehicle = vehicle;
+          if (existing.iconKey !== iconData.key) {
+            existing.marker.setIcon(iconData.icon);
+            existing.iconKey = iconData.key;
           }
-          const popupHtml = popupParts.join('<br>');
-          const matchesFilter = matchesActiveFilter(vehicle);
-          const existing = markers[key];
-          if (existing) {
-            existing.lastVehicle = vehicle;
-            existing.marker.setIcon(icon);
-            if (routeLabel) {
-              existing.marker.bindTooltip(`Linia ${routeLabel}`, ROUTE_TOOLTIP_OPTIONS);
+          if (existing.routeLabel !== iconData.label) {
+            if (iconData.label) {
+              existing.marker.bindTooltip(`Linia ${iconData.label}`, ROUTE_TOOLTIP_OPTIONS);
             } else if (existing.marker.getTooltip()) {
               existing.marker.unbindTooltip();
             }
+            existing.routeLabel = iconData.label;
+          }
+          if (existing.popupHtml !== popupHtml) {
             const popup = existing.marker.getPopup();
             if (popupHtml) {
               if (popup) {
@@ -425,43 +594,85 @@
             } else if (popup) {
               popup.setContent('');
             }
-            if (!matchesFilter) {
-              existing.marker.setLatLng(latlng);
-              existing.lastLatLng = { lat: latlng[0], lng: latlng[1] };
-              setMarkerVisibility(existing, false);
-              return;
-            }
-            setMarkerVisibility(existing, true);
-            if (shouldAnimate()) {
-              animateMarker(existing, latlng, interval);
-            } else {
-              cancelAnimation(existing);
-              existing.marker.setLatLng(latlng);
-              existing.lastLatLng = { lat: latlng[0], lng: latlng[1] };
-            }
-            return;
+            existing.popupHtml = popupHtml;
           }
 
-          if (!matchesFilter) return;
+          const previousSampleTimestamp = existing.sampleTimestamp;
+          setMarkerVisibility(existing, matchesFilter);
+          scheduleMotion(existing, latlng, sampleTimestamp, previousSampleTimestamp, interval);
+          existing.sampleTimestamp = sampleTimestamp;
+          return;
+        }
 
-          const marker = L.marker(latlng, { icon });
-          if (popupHtml) {
-            marker.bindPopup(popupHtml);
-          }
-          if (routeLabel) {
-            marker.bindTooltip(`Linia ${routeLabel}`, ROUTE_TOOLTIP_OPTIONS);
-          }
+        const marker = L.marker(latlng, { icon: iconData.icon });
+        if (popupHtml) {
+          marker.bindPopup(popupHtml);
+        }
+        if (iconData.label) {
+          marker.bindTooltip(`Linia ${iconData.label}`, ROUTE_TOOLTIP_OPTIONS);
+        }
+        const entry = {
+          marker,
+          lastLatLng: { lat: latlng[0], lng: latlng[1] },
+          isVisible: matchesFilter,
+          lastVehicle: vehicle,
+          iconKey: iconData.key,
+          routeLabel: iconData.label,
+          popupHtml,
+          sampleTimestamp: undefined,
+          motion: null
+        };
+        markers[key] = entry;
+        if (matchesFilter) {
           marker.addTo(map);
-          markers[key] = {
-            marker,
-            lastLatLng: { lat: latlng[0], lng: latlng[1] },
-            animationFrame: null,
-            isVisible: true,
-            lastVehicle: vehicle
-          };
-        });
+        }
+        scheduleMotion(entry, latlng, sampleTimestamp, entry.sampleTimestamp, interval);
+        entry.sampleTimestamp = sampleTimestamp;
+      });
+      if (lastServerTimestamp) {
+        const parsed = Date.parse(lastServerTimestamp);
+        lastSuccessfulUpdate = Number.isNaN(parsed) ? new Date() : new Date(parsed);
+      } else {
         lastSuccessfulUpdate = new Date();
+      }
+      if (profilerEnabled) {
+        perfState.lastDataAgeMs = Date.now() - lastSuccessfulUpdate.getTime();
+        updatePerfPanel();
+      }
+    }
+
+    async function updatePositions() {
+      if (isFetching) {
+        pendingImmediateUpdate = true;
+        return;
+      }
+      isFetching = true;
+      const interval = currentInterval();
+      refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval, 'pobieranie…');
+      try {
+        const fetchStart = profilerEnabled ? performance.now() : 0;
+        const options = { cache: 'no-store', headers: {} };
+        if (lastETag) {
+          options.headers['If-None-Match'] = lastETag;
+        }
+        const res = await fetch('/positions', options);
+        if (profilerEnabled) {
+          perfState.fetchMs = performance.now() - fetchStart;
+        }
+        if (res.status === 304 && lastPayload) {
+          applyPositions(lastPayload, interval);
+          refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval);
+          return;
+        }
+        const data = await res.json();
+        lastETag = res.headers.get('ETag') || lastETag;
+        lastServerTimestamp = res.headers.get('X-Feed-Updated-At') || lastServerTimestamp;
+        lastPayload = Array.isArray(data) ? data : [];
+        applyPositions(lastPayload, interval);
         refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval);
+        if (profilerEnabled) {
+          updatePerfPanel();
+        }
       } catch (err) {
         console.error('Błąd podczas pobierania pozycji pojazdów:', err);
         refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'błąd pobierania');

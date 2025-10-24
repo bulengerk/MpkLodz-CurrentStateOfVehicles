@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const compression = require('compression');
 // Attempt to use the global fetch implementation available in Node 18 and later.
 // If unavailable (e.g. in older Node versions), fall back to requiring
 // `node-fetch`.  Note that `node-fetch` is not declared as a dependency in
@@ -31,6 +32,15 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 // latitude, longitude, bearing, speed and identifiers from the feed.  Clients
 // query this list via the `/positions` endpoint.
 let vehicles = [];
+let vehiclesJson = '[]';
+let lastUpdatedAtMs = 0;
+let lastUpdateError = null;
+let inFlightUpdate = null;
+
+function currentEtag() {
+  if (!lastUpdatedAtMs) return 'W/"empty"';
+  return `"${lastUpdatedAtMs}-${vehiclesJson.length}"`;
+}
 
 /**
  * Fetch the GTFS‑RT feed and update the in‑memory list of vehicles.
@@ -41,40 +51,48 @@ let vehicles = [];
  * vehicle does not include geographic coordinates it is ignored.
  */
 async function updateFeed() {
-  try {
-    const response = await fetchFn(FEED_URL);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`);
-    }
-    // Decode the binary feed into a FeedMessage object.  The arrayBuffer() call
-    // reads the response body into an ArrayBuffer, which is then wrapped
-    // by a Uint8Array for the decoder.
-    const buffer = await response.arrayBuffer();
-    const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(buffer));
-    // Extract vehicle positions.  Each entity may include a vehicle object
-    // containing the current GPS coordinates and other metadata.
-    const positions = [];
-    for (const entity of feed.entity) {
-      const vehicle = entity.vehicle;
-      if (!vehicle || !vehicle.position || vehicle.position.latitude == null || vehicle.position.longitude == null) {
-        continue;
+  if (inFlightUpdate) return inFlightUpdate;
+  inFlightUpdate = (async () => {
+    try {
+      const response = await fetchFn(FEED_URL);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
       }
-      positions.push({
-        id: (vehicle.vehicle && (vehicle.vehicle.id || vehicle.vehicle.label)) || entity.id || null,
-        label: vehicle.vehicle ? vehicle.vehicle.label : null,
-        lat: vehicle.position.latitude,
-        lon: vehicle.position.longitude,
-        bearing: vehicle.position.bearing || null,
-        speed: vehicle.position.speed || null,
-        routeId: vehicle.trip ? (vehicle.trip.routeId || vehicle.trip.route_id) : null,
-        tripId: vehicle.trip ? (vehicle.trip.tripId || vehicle.trip.trip_id) : null,
-        timestamp: vehicle.timestamp ? Number(vehicle.timestamp) * 1000 : null
-      });
+      const buffer = await response.arrayBuffer();
+      const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(buffer));
+      const positions = [];
+      for (const entity of feed.entity) {
+        const vehicle = entity.vehicle;
+        if (!vehicle || !vehicle.position || vehicle.position.latitude == null || vehicle.position.longitude == null) {
+          continue;
+        }
+        positions.push({
+          id: (vehicle.vehicle && (vehicle.vehicle.id || vehicle.vehicle.label)) || entity.id || null,
+          label: vehicle.vehicle ? vehicle.vehicle.label : null,
+          lat: vehicle.position.latitude,
+          lon: vehicle.position.longitude,
+          bearing: vehicle.position.bearing || null,
+          speed: vehicle.position.speed || null,
+          routeId: vehicle.trip ? (vehicle.trip.routeId || vehicle.trip.route_id) : null,
+          tripId: vehicle.trip ? (vehicle.trip.tripId || vehicle.trip.trip_id) : null,
+          timestamp: vehicle.timestamp ? Number(vehicle.timestamp) * 1000 : null
+        });
+      }
+      vehicles = positions;
+      vehiclesJson = JSON.stringify(positions);
+      lastUpdatedAtMs = Date.now();
+      lastUpdateError = null;
+      console.log(`[${new Date().toISOString()}] Updated positions: ${vehicles.length}`);
+    } catch (err) {
+      lastUpdateError = err;
+      console.error(`[${new Date().toISOString()}] Failed to update feed:`, err.message);
     }
-    vehicles = positions;
-    console.log(`[${new Date().toISOString()}] Updated positions: ${vehicles.length}`);
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Failed to update feed:`, err.message);
+  })();
+
+  try {
+    await inFlightUpdate;
+  } finally {
+    inFlightUpdate = null;
   }
 }
 
@@ -89,6 +107,8 @@ setInterval(updateFeed, REFRESH_INTERVAL_MS);
 // directory.  The static middleware will serve files such as index.html,
 // JavaScript and CSS from the `public` folder.
 const app = express();
+app.set('etag', false);
+app.use(compression({ threshold: 512 }));
 const publicDir = path.join(__dirname, 'public');
 app.use(express.static(publicDir));
 
@@ -96,8 +116,37 @@ app.use(express.static(publicDir));
 // periodically poll this endpoint to refresh the markers on the map.  The
 // response is structured as an array of objects with lat, lon and various
 // identifiers.
-app.get('/positions', (req, res) => {
-  res.json(vehicles);
+app.get('/positions', async (req, res) => {
+  if (inFlightUpdate) {
+    try {
+      await inFlightUpdate;
+    } catch (err) {
+      // already captured in lastUpdateError
+    }
+  } else if (!vehicles.length) {
+    try {
+      await updateFeed();
+    } catch (err) {
+      // ignore, handled elsewhere
+    }
+  }
+
+  const etag = currentEtag();
+  res.set('Cache-Control', 'public, max-age=1, must-revalidate');
+  res.set('ETag', etag);
+  if (lastUpdatedAtMs) {
+    res.set('X-Feed-Updated-At', new Date(lastUpdatedAtMs).toISOString());
+  }
+  if (lastUpdateError) {
+    res.set('X-Feed-Error', lastUpdateError.message || 'Unknown error');
+  }
+
+  if (req.headers['if-none-match'] === etag) {
+    res.status(304).end();
+    return;
+  }
+
+  res.type('application/json').send(vehiclesJson);
 });
 
 // Explicitly serve the index file at the root URL.  This handler is
