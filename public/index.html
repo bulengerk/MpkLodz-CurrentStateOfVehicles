@@ -4,9 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MPK Łódź – Pozycje pojazdów w czasie rzeczywistym</title>
-  <!-- Leaflet CSS -->
-  <!-- Ładuj arkusz stylów Leaflet bez atrybutów SRI, aby uniknąć problemów z
-       weryfikacją integralności w środowiskach z ograniczonym dostępem do sieci. -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     html, body, #map {
@@ -14,35 +11,106 @@
       margin: 0;
       padding: 0;
     }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      background: #f5f5f5;
+    }
+
+    #map {
+      position: relative;
+      z-index: 1;
+    }
+
+    #refresh-info {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 1000;
+      padding: 8px 12px;
+      background: rgba(33, 33, 33, 0.85);
+      color: #fff;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      font-size: 14px;
+      letter-spacing: 0.2px;
+    }
+
+    .vehicle-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      transform: translate(-50%, -50%);
+    }
+
+    .vehicle-icon svg {
+      width: 32px;
+      height: 32px;
+      filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.35));
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <div id="refresh-info">Ładowanie danych pojazdów…</div>
 
-  <!-- Leaflet JS -->
-  <!-- Ładuj bibliotekę Leaflet bez atrybutów SRI i CORS.  Ułatwia to pobieranie
-       w przypadku zapór ogniowych lub serwerów CDN modyfikujących treść. -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    // Initialise the map centred on Łódź.  You can adjust the zoom level to
-    // display a larger or smaller area by default.
     const map = L.map('map').setView([51.759, 19.458], 12);
-    
-    // Add a tile layer.  OpenStreetMap tiles are free to use.  You can
-    // substitute another provider if desired (e.g. CartoDB, MapTiler, etc.).
+
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a> contributors'
     }).addTo(map);
 
-    // Maintain a lookup of markers by vehicle identifier so they can be
-    // efficiently updated rather than recreated on each refresh.
     const markers = {};
+    const refreshInfo = document.getElementById('refresh-info');
+    const REFRESH_INTERVAL_MS = 15000;
 
-    /**
-     * Fetch the latest vehicle positions from the server and update markers on
-     * the map accordingly.  New markers are added for vehicles we haven't
-     * seen before and existing markers are moved to their new locations.
-     */
+    const busSvg = `<?xml version='1.0' encoding='UTF-8'?><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='g' x1='0%' y1='0%' x2='0%' y2='100%'><stop offset='0%' stop-color='#d84315'/><stop offset='100%' stop-color='#bf360c'/></linearGradient></defs><rect x='10' y='14' width='44' height='30' rx='8' ry='8' fill='url(#g)' stroke='#431000' stroke-width='2'/><rect x='16' y='18' width='32' height='14' rx='2' fill='#ffe0b2'/><rect x='16' y='35' width='8' height='6' rx='1' fill='#212121'/><rect x='40' y='35' width='8' height='6' rx='1' fill='#212121'/><circle cx='20' cy='49' r='5' fill='#263238'/><circle cx='44' cy='49' r='5' fill='#263238'/><rect x='24' y='8' width='16' height='4' rx='2' fill='#431000'/></svg>`;
+
+    const tramSvg = `<?xml version='1.0' encoding='UTF-8'?><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='gt' x1='0%' y1='0%' x2='0%' y2='100%'><stop offset='0%' stop-color='#1565c0'/><stop offset='100%' stop-color='#0d47a1'/></linearGradient></defs><rect x='12' y='16' width='40' height='26' rx='6' ry='6' fill='url(#gt)' stroke='#06204d' stroke-width='2'/><rect x='18' y='20' width='28' height='10' rx='2' fill='#bbdefb'/><rect x='16' y='32' width='6' height='6' rx='1' fill='#0d47a1'/><rect x='42' y='32' width='6' height='6' rx='1' fill='#0d47a1'/><rect x='28' y='10' width='8' height='6' rx='2' fill='#0d47a1'/><rect x='18' y='44' width='28' height='4' fill='#424242'/><rect x='16' y='48' width='32' height='2' fill='#90a4ae'/></svg>`;
+
+    function createSvgIcon(svgMarkup) {
+      return L.divIcon({
+        html: `<div class="vehicle-icon">${svgMarkup}</div>`,
+        className: '',
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+        popupAnchor: [0, -18]
+      });
+    }
+
+    const busIcon = createSvgIcon(busSvg);
+    const tramIcon = createSvgIcon(tramSvg);
+
+    const TRAM_ROUTES = new Set([
+      '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '11A', '11B',
+      '12', '14', '15', '16', '17', '41'
+    ]);
+
+    function isTram(vehicle) {
+      const route = (vehicle.routeId || '').toString().toUpperCase();
+      if (route && TRAM_ROUTES.has(route)) return true;
+      const label = (vehicle.label || '').toString();
+      return /TRAM/i.test(label);
+    }
+
+    function iconForVehicle(vehicle) {
+      return isTram(vehicle) ? tramIcon : busIcon;
+    }
+
+    function formatRefreshInfo(lastSuccess) {
+      const seconds = Math.round(REFRESH_INTERVAL_MS / 1000);
+      const base = `Odświeżanie mapy: co ${seconds} s`;
+      if (!lastSuccess) return `${base} | ostatnia aktualizacja: oczekiwanie…`;
+      return `${base} | ostatnia aktualizacja: ${lastSuccess.toLocaleTimeString('pl-PL')}`;
+    }
+
+    let lastSuccessfulUpdate = null;
+    refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate);
+
     async function updatePositions() {
       try {
         const res = await fetch('/positions');
@@ -52,36 +120,34 @@
           const key = vehicle.id || vehicle.label || `${vehicle.lat},${vehicle.lon}`;
           if (!key) return;
           const latlng = [vehicle.lat, vehicle.lon];
+          const icon = iconForVehicle(vehicle);
           if (markers[key]) {
             markers[key].setLatLng(latlng);
+            markers[key].setIcon(icon);
           } else {
-            const marker = L.circleMarker(latlng, {
-              radius: 6,
-              color: '#e53935',
-              weight: 2,
-              fillColor: '#e57373',
-              fillOpacity: 0.8
-            });
+            const marker = L.marker(latlng, { icon });
             const popupContent = [];
             if (vehicle.routeId) popupContent.push(`<strong>Linia:</strong> ${vehicle.routeId}`);
             if (vehicle.tripId) popupContent.push(`<strong>Trip:</strong> ${vehicle.tripId}`);
             if (vehicle.timestamp) {
               const date = new Date(vehicle.timestamp);
-              popupContent.push(`<strong>Czas:</strong> ${date.toLocaleTimeString()}`);
+              popupContent.push(`<strong>Czas:</strong> ${date.toLocaleTimeString('pl-PL')}`);
             }
             marker.bindPopup(popupContent.join('<br>'));
             marker.addTo(map);
             markers[key] = marker;
           }
         });
+        lastSuccessfulUpdate = new Date();
+        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate);
       } catch (err) {
         console.error('Błąd podczas pobierania pozycji pojazdów:', err);
+        refreshInfo.textContent = `${formatRefreshInfo(lastSuccessfulUpdate)} | błąd pobierania`;
       }
     }
 
-    // Immediately fetch and display positions, then refresh every 15 seconds.
     updatePositions();
-    setInterval(updatePositions, 15000);
+    setInterval(updatePositions, REFRESH_INTERVAL_MS);
   </script>
 </body>
 </html>
