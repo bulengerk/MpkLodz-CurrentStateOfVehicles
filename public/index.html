@@ -40,16 +40,17 @@
       position: fixed;
       top: 16px;
       left: 16px;
+      right: 16px;
       z-index: 1000;
       display: flex;
       gap: 8px;
       align-items: center;
-      flex-wrap: wrap;
       padding: 10px 12px;
       background: rgba(255, 255, 255, 0.95);
       border-radius: 8px;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
       font-size: 14px;
+      flex-wrap: wrap;
     }
 
     #controls label {
@@ -63,6 +64,7 @@
       border: 1px solid #cfd8dc;
       border-radius: 4px;
       font-size: 14px;
+      flex: 1 1 140px;
     }
 
     #controls button {
@@ -74,6 +76,7 @@
       cursor: pointer;
       font-size: 13px;
       transition: background 0.2s ease;
+      flex: 0 0 auto;
     }
 
     #controls button:hover {
@@ -94,6 +97,8 @@
       justify-content: center;
       width: 36px;
       height: 36px;
+      transform: rotate(var(--heading, 0deg));
+      transition: transform 0.4s ease-out;
     }
 
     .vehicle-icon svg {
@@ -121,35 +126,49 @@
       display: inline-block;
     }
 
-    #footer {
-      position: fixed;
-      bottom: 12px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 6px 12px;
-      background: rgba(33, 33, 33, 0.85);
-      color: #fff;
-      border-radius: 12px;
-      font-size: 13px;
-      letter-spacing: 0.3px;
-      z-index: 1000;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    @media (max-width: 640px) {
+      #controls {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+      }
+      #controls input {
+        width: 100%;
+        flex: 1 1 auto;
+      }
+      #controls button {
+        width: 100%;
+      }
+      #refresh-info {
+        left: 16px;
+        right: 16px;
+        top: 96px;
+        text-align: center;
+      }
     }
 
-    #perf-panel {
+    #data-attribution {
       position: fixed;
       bottom: 12px;
       right: 16px;
-      padding: 6px 10px;
-      background: rgba(0, 0, 0, 0.7);
-      color: #fff;
-      border-radius: 8px;
-      font-size: 12px;
-      line-height: 1.35;
       z-index: 1000;
-      font-family: 'Segoe UI', Tahoma, sans-serif;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-      min-width: 140px;
+      padding: 4px 8px;
+      background: rgba(255, 255, 255, 0.85);
+      color: #263238;
+      border-radius: 6px;
+      font-size: 11px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      line-height: 1.4;
+    }
+
+    #data-attribution a {
+      color: inherit;
+      text-decoration: none;
+      border-bottom: 1px dotted currentColor;
+    }
+
+    #data-attribution a:hover {
+      text-decoration: underline;
     }
   </style>
 </head>
@@ -158,12 +177,11 @@
     <label for="route-filter">Pokaż linię</label>
     <input id="route-filter" type="text" placeholder="np. 52 lub 1" autocomplete="off">
     <button id="clear-route-filter" type="button">Pokaż wszystkie</button>
-    <button id="toggle-profiler" type="button">Profiling: off</button>
+    <button id="locate-user" type="button">Lokalizuj</button>
   </div>
   <div id="map"></div>
   <div id="refresh-info">Ładowanie danych pojazdów…</div>
-  <div id="perf-panel" hidden></div>
-  <div id="footer">Gwarancja do bramy i sie nie znamy, Bułek  2025</div>
+  <div id="data-attribution">Dane: <a href="https://otwarte.miasto.lodz.pl/" target="_blank" rel="noopener">otwarte.miasto.lodz.pl</a></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
@@ -177,34 +195,27 @@
     const refreshInfo = document.getElementById('refresh-info');
     const routeFilterInput = document.getElementById('route-filter');
     const clearFilterButton = document.getElementById('clear-route-filter');
-    const toggleProfilerButton = document.getElementById('toggle-profiler');
-    const perfPanel = document.getElementById('perf-panel');
+    const locateButton = document.getElementById('locate-user');
     const DEFAULT_INTERVAL_MS = 14000;
     const FOCUSED_INTERVAL_MS = 3000;
     const FILTERED_INTERVAL_MS = 2500;
     const LABEL_ZOOM_THRESHOLD = 15;
-    const MOTION_MIN_DURATION_MS = 500;
-    const MOTION_MAX_DURATION_MS = 9000;
-    const MOTION_PROJECTION_MS = 12000;
-    const MOTION_PROJECTION_FACTOR = 3;
-    const MOTION_MAX_PROJECTION_MS = 20000;
+    const MOTION_MIN_DURATION_MS = 400;
+    const MOTION_MAX_DURATION_MS = 6000;
+    const MOTION_PROJECTION_MS = 2500;
+    const MOTION_PROJECTION_FACTOR = 1.25;
+    const MOTION_MAX_PROJECTION_MS = 5000;
+    const MAX_INTERPOLATION_SPEED_M_S = 18; // ~65 km/h
+    const USER_LOCATION_ZOOM = 16;
+    const USER_LOCATION_RADIUS_METERS = 30;
     let refreshTimer = null;
     let isFetching = false;
     let pendingImmediateUpdate = false;
     let activeRouteFilter = '';
     let activeRouteFilterLabel = '';
-    let lastPayload = null;
     let lastETag = null;
     let lastServerTimestamp = null;
-    let profilerEnabled = false;
-    const perfState = {
-      enabled: false,
-      fps: 0,
-      frameSamples: 0,
-      lastFrameSampleTime: performance.now(),
-      fetchMs: null,
-      lastDataAgeMs: null
-    };
+    let userLocationMarker = null;
     const raf = window.requestAnimationFrame
       ? window.requestAnimationFrame.bind(window)
       : (callback) => setTimeout(() => callback(Date.now()), 16);
@@ -229,12 +240,24 @@
       return normalized.split(/[^A-Z0-9]+/).filter(Boolean);
     }
 
+    function tokenMatchesActiveFilter(token) {
+      if (!activeRouteFilter) return true;
+      const normalizedToken = normalizeRoute(token);
+      if (!normalizedToken) return false;
+      if (normalizedToken === activeRouteFilter) return true;
+      const filterNumericOnly = /^[0-9]+$/.test(activeRouteFilter);
+      if (filterNumericOnly && normalizedToken.startsWith(activeRouteFilter)) {
+        return true;
+      }
+      return false;
+    }
+
     function matchesActiveFilter(vehicle) {
       if (!activeRouteFilter) return true;
       const route = normalizeRoute(vehicle.routeId);
-      if (route && route === activeRouteFilter) return true;
+      if (tokenMatchesActiveFilter(route)) return true;
       const labelTokens = possibleRoutesFromLabel(vehicle.label);
-      return labelTokens.includes(activeRouteFilter);
+      return labelTokens.some(tokenMatchesActiveFilter);
     }
 
     function deriveRouteLabel(vehicle) {
@@ -253,6 +276,9 @@
           const visibleLatLng = currentLatLng(entry);
           if (visibleLatLng) {
             entry.marker.setLatLng([visibleLatLng.lat, visibleLatLng.lng]);
+          }
+          if (entry.heading != null) {
+            updateMarkerHeading(entry, entry.heading);
           }
         }
         entry.isVisible = true;
@@ -284,26 +310,6 @@
       if (!isFetching) updatePositions();
     }
 
-    function updatePerfPanel() {
-      if (!profilerEnabled) return;
-      const fpsText = perfState.fps ? `${perfState.fps} fps` : 'n/a';
-      const fetchText = perfState.fetchMs != null ? `${Math.round(perfState.fetchMs)} ms` : 'n/a';
-      const ageText = perfState.lastDataAgeMs != null ? `${Math.round(perfState.lastDataAgeMs)} ms` : 'n/a';
-      perfPanel.innerHTML = `FPS: ${fpsText}<br>Pobranie: ${fetchText}<br>Wiek danych: ${ageText}`;
-    }
-
-    function recordAnimationFrame() {
-      if (!profilerEnabled) return;
-      const now = performance.now();
-      perfState.frameSamples += 1;
-      const elapsed = now - perfState.lastFrameSampleTime;
-      if (elapsed >= 1000) {
-        perfState.fps = Math.round((perfState.frameSamples * 1000) / elapsed);
-        perfState.frameSamples = 0;
-        perfState.lastFrameSampleTime = now;
-        updatePerfPanel();
-      }
-    }
 
     const busSvg = `<?xml version='1.0' encoding='UTF-8'?><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='10' y='14' width='44' height='32' rx='10' ry='10' fill='#c62828' stroke='#5d1010' stroke-width='2'/><rect x='16' y='18' width='32' height='14' rx='3' fill='#fbe9e7'/><rect x='14' y='34' width='36' height='8' rx='3' fill='#6d4c41'/><circle cx='22' cy='50' r='6' fill='#263238'/><circle cx='42' cy='50' r='6' fill='#263238'/><rect x='24' y='8' width='16' height='4' rx='2' fill='#5d1010'/><circle cx='18' cy='30' r='3' fill='#ffab40'/><circle cx='46' cy='30' r='3' fill='#ffab40'/></svg>`;
 
@@ -365,6 +371,33 @@
       return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     }
 
+    function normalizeBearing(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return null;
+      const wrapped = numeric % 360;
+      return wrapped < 0 ? wrapped + 360 : wrapped;
+    }
+
+    function updateMarkerHeading(entry, bearing) {
+      const normalized = normalizeBearing(bearing);
+      entry.heading = normalized;
+      const applyHeading = () => {
+        const element = entry.marker.getElement();
+        if (!element) return false;
+        const iconEl = element.querySelector('.vehicle-icon');
+        if (!iconEl) return false;
+        if (normalized == null) {
+          iconEl.style.removeProperty('--heading');
+        } else {
+          iconEl.style.setProperty('--heading', `${normalized}deg`);
+        }
+        return true;
+      };
+      if (!applyHeading()) {
+        entry.marker.once('add', () => updateMarkerHeading(entry, normalized));
+      }
+    }
+
     function durationForMotion(previousTimestamp, sampleTimestamp, fallbackDuration) {
       if (!previousTimestamp || !Number.isFinite(previousTimestamp)) {
         return fallbackDuration;
@@ -387,19 +420,38 @@
     function scheduleMotion(entry, targetLatLng, sampleTimestamp, previousSampleTimestamp, intervalMs) {
       const now = Date.now();
       const startLatLng = currentLatLng(entry) || { lat: targetLatLng[0], lng: targetLatLng[1] };
+      const distanceMeters = map.distance(
+        L.latLng(startLatLng.lat, startLatLng.lng),
+        L.latLng(targetLatLng[0], targetLatLng[1])
+      );
+      if (!isFinite(distanceMeters) || distanceMeters < 0.5) {
+        entry.motion = null;
+        entry.lastLatLng = { lat: targetLatLng[0], lng: targetLatLng[1] };
+        if (entry.isVisible !== false) {
+          entry.marker.setLatLng(targetLatLng);
+        }
+        return;
+      }
+
       const fallbackDuration = Math.min(MOTION_MAX_DURATION_MS, Math.max(MOTION_MIN_DURATION_MS, intervalMs));
-      const duration = durationForMotion(previousSampleTimestamp, sampleTimestamp, fallbackDuration);
+      const ageDuration = durationForMotion(previousSampleTimestamp, sampleTimestamp, fallbackDuration);
+      const distanceDuration = Math.min(
+        MOTION_MAX_DURATION_MS,
+        Math.max(MOTION_MIN_DURATION_MS, (distanceMeters / MAX_INTERPOLATION_SPEED_M_S) * 1000)
+      );
+      const duration = Math.min(
+        MOTION_MAX_DURATION_MS,
+        Math.max(MOTION_MIN_DURATION_MS, Math.max(ageDuration, distanceDuration))
+      );
       const targetTimeMs = now + duration;
       const projectionWindow = Math.min(
         MOTION_MAX_PROJECTION_MS,
         Math.max(MOTION_PROJECTION_MS, Math.max(MOTION_MIN_DURATION_MS, intervalMs) * MOTION_PROJECTION_FACTOR)
       );
-      const velocity = duration > 0
-        ? {
-            latPerMs: (targetLatLng[0] - startLatLng.lat) / duration,
-            lngPerMs: (targetLatLng[1] - startLatLng.lng) / duration
-          }
-        : { latPerMs: 0, lngPerMs: 0 };
+      const velocity = {
+        latPerMs: (targetLatLng[0] - startLatLng.lat) / duration,
+        lngPerMs: (targetLatLng[1] - startLatLng.lng) / duration
+      };
       entry.motion = {
         startLatLng,
         targetLatLng: { lat: targetLatLng[0], lng: targetLatLng[1] },
@@ -422,7 +474,6 @@
     function stepAnimations() {
       const now = Date.now();
       let shouldContinue = false;
-      recordAnimationFrame();
       Object.values(markers).forEach(entry => {
         if (!entry.motion) return;
         const motion = entry.motion;
@@ -437,14 +488,15 @@
           lng = startLatLng.lng + (targetLatLng.lng - startLatLng.lng) * eased;
           shouldContinue = true;
         } else {
-          const overshoot = Math.min(now - targetTimeMs, projectionMs);
-          lat = targetLatLng.lat + velocity.latPerMs * overshoot;
-          lng = targetLatLng.lng + velocity.lngPerMs * overshoot;
-          if (overshoot < projectionMs && (Math.abs(velocity.latPerMs) > 1e-7 || Math.abs(velocity.lngPerMs) > 1e-7)) {
+          const overshoot = now - targetTimeMs;
+          if (overshoot < projectionMs) {
+            lat = targetLatLng.lat;
+            lng = targetLatLng.lng;
             shouldContinue = true;
-          }
-          if (overshoot >= projectionMs || (Math.abs(velocity.latPerMs) < 1e-7 && Math.abs(velocity.lngPerMs) < 1e-7)) {
+          } else {
             entry.motion = null;
+            lat = targetLatLng.lat;
+            lng = targetLatLng.lng;
           }
         }
         motion.currentLatLng = { lat, lng };
@@ -530,21 +582,44 @@
       routeFilterInput.focus();
     });
 
-    toggleProfilerButton.addEventListener('click', () => {
-      profilerEnabled = !profilerEnabled;
-      perfState.enabled = profilerEnabled;
-      perfState.frameSamples = 0;
-      perfState.lastFrameSampleTime = performance.now();
-      if (!profilerEnabled) {
-        perfPanel.hidden = true;
-        perfState.fps = 0;
-        perfState.fetchMs = null;
-        perfState.lastDataAgeMs = null;
-      } else {
-        perfPanel.hidden = false;
-        updatePerfPanel();
+    locateButton.addEventListener('click', () => {
+      if (!navigator.geolocation) {
+        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'geolokalizacja niedostępna');
+        return;
       }
-      toggleProfilerButton.textContent = profilerEnabled ? 'Profiling: on' : 'Profiling: off';
+      locateButton.disabled = true;
+      refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'szukam lokalizacji…');
+      navigator.geolocation.getCurrentPosition(position => {
+        locateButton.disabled = false;
+        const { latitude, longitude, accuracy } = position.coords;
+        const latlng = [latitude, longitude];
+        const targetZoom = Math.max(map.getZoom(), USER_LOCATION_ZOOM);
+        map.flyTo(latlng, targetZoom, { duration: 0.8 });
+        const radius = Math.max(USER_LOCATION_RADIUS_METERS, accuracy || USER_LOCATION_RADIUS_METERS);
+        if (userLocationMarker) {
+          userLocationMarker.setLatLng(latlng);
+          if (userLocationMarker.setRadius) {
+            userLocationMarker.setRadius(radius);
+          }
+        } else {
+          userLocationMarker = L.circle(latlng, {
+            radius,
+            color: '#1b5e20',
+            weight: 2,
+            fillColor: '#4caf50',
+            fillOpacity: 0.2
+          }).addTo(map);
+        }
+        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'zlokalizowano');
+      }, err => {
+        locateButton.disabled = false;
+        console.error('Geolocation error:', err);
+        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'lokalizacja niedostępna');
+      }, {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 60000
+      });
     });
 
     function applyPositions(data, interval) {
@@ -575,6 +650,7 @@
             existing.marker.setIcon(iconData.icon);
             existing.iconKey = iconData.key;
           }
+          updateMarkerHeading(existing, vehicle.bearing);
           if (existing.routeLabel !== iconData.label) {
             if (iconData.label) {
               existing.marker.bindTooltip(`Linia ${iconData.label}`, ROUTE_TOOLTIP_OPTIONS);
@@ -620,12 +696,14 @@
           routeLabel: iconData.label,
           popupHtml,
           sampleTimestamp: undefined,
-          motion: null
+          motion: null,
+          heading: null
         };
         markers[key] = entry;
         if (matchesFilter) {
           marker.addTo(map);
         }
+        updateMarkerHeading(entry, vehicle.bearing);
         scheduleMotion(entry, latlng, sampleTimestamp, entry.sampleTimestamp, interval);
         entry.sampleTimestamp = sampleTimestamp;
       });
@@ -634,10 +712,6 @@
         lastSuccessfulUpdate = Number.isNaN(parsed) ? new Date() : new Date(parsed);
       } else {
         lastSuccessfulUpdate = new Date();
-      }
-      if (profilerEnabled) {
-        perfState.lastDataAgeMs = Date.now() - lastSuccessfulUpdate.getTime();
-        updatePerfPanel();
       }
     }
 
@@ -650,29 +724,21 @@
       const interval = currentInterval();
       refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval, 'pobieranie…');
       try {
-        const fetchStart = profilerEnabled ? performance.now() : 0;
         const options = { cache: 'no-store', headers: {} };
         if (lastETag) {
           options.headers['If-None-Match'] = lastETag;
         }
         const res = await fetch('/positions', options);
-        if (profilerEnabled) {
-          perfState.fetchMs = performance.now() - fetchStart;
-        }
-        if (res.status === 304 && lastPayload) {
-          applyPositions(lastPayload, interval);
+        if (res.status === 304) {
           refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval);
           return;
         }
         const data = await res.json();
         lastETag = res.headers.get('ETag') || lastETag;
         lastServerTimestamp = res.headers.get('X-Feed-Updated-At') || lastServerTimestamp;
-        lastPayload = Array.isArray(data) ? data : [];
-        applyPositions(lastPayload, interval);
+        const parsedData = Array.isArray(data) ? data : [];
+        applyPositions(parsedData, interval);
         refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval);
-        if (profilerEnabled) {
-          updatePerfPanel();
-        }
       } catch (err) {
         console.error('Błąd podczas pobierania pozycji pojazdów:', err);
         refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'błąd pobierania');
