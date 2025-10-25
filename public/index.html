@@ -283,7 +283,7 @@
     let refreshTimer = null;
     let isFetching = false;
     let pendingImmediateUpdate = false;
-    let activeRouteFilter = '';
+    let activeRouteFilters = [];
     let activeRouteFilterLabel = '';
     let lastETag = null;
     let lastServerTimestamp = null;
@@ -319,39 +319,29 @@
       return headsign.toString().trim();
     }
 
-    function possibleRoutesFromLabel(value) {
-      const normalized = normalizeRoute(value);
-      if (!normalized) return [];
-      return normalized.split(/[^A-Z0-9]+/).filter(Boolean);
-    }
-
-    function tokenMatchesActiveFilter(token) {
-      if (!activeRouteFilter) return true;
-      const normalizedToken = normalizeRoute(token);
-      if (!normalizedToken) return false;
-      if (normalizedToken === activeRouteFilter) return true;
-      const filterNumericOnly = /^[0-9]+$/.test(activeRouteFilter);
-      if (filterNumericOnly && normalizedToken.startsWith(activeRouteFilter)) {
-        return true;
-      }
-      return false;
+    function parseRouteTokens(vehicle) {
+      const tokens = [];
+      const routeId = normalizeRoute(vehicle.routeId);
+      if (routeId) tokens.push(routeId);
+      return tokens;
     }
 
     function matchesActiveFilter(vehicle) {
-      if (!activeRouteFilter) return true;
-      const route = normalizeRoute(vehicle.routeId);
-      if (tokenMatchesActiveFilter(route)) return true;
-      const labelTokens = possibleRoutesFromLabel(vehicle.label);
-      return labelTokens.some(tokenMatchesActiveFilter);
+      if (!activeRouteFilters.length) return true;
+      const tokens = parseRouteTokens(vehicle);
+      if (!tokens.length) return false;
+      return tokens.some(token => {
+        const normalizedToken = normalizeRoute(token);
+        if (!normalizedToken) return false;
+        return activeRouteFilters.some(filterToken => normalizedToken.startsWith(filterToken));
+      });
     }
 
     function deriveRouteLabel(vehicle) {
-      const route = normalizeRoute(vehicle.routeId);
-      if (route) return route;
-      const labelTokens = possibleRoutesFromLabel(vehicle.label);
-      if (!labelTokens.length) return '';
-      const tokenWithDigit = labelTokens.find(token => /\d/.test(token));
-      return tokenWithDigit || labelTokens[0];
+      const explicit = normalizeRoute(vehicle.routeId);
+      if (explicit) return explicit;
+      const tokens = parseRouteTokens(vehicle);
+      return tokens.length ? tokens[0] : '';
     }
 
     function setMarkerVisibility(entry, shouldShow) {
@@ -384,11 +374,18 @@
     }
 
     function setRouteFilter(rawValue) {
-      const display = (rawValue || '').trim();
-      const normalized = normalizeRoute(display);
-      if (activeRouteFilter === normalized && activeRouteFilterLabel === display) return;
-      activeRouteFilter = normalized;
-      activeRouteFilterLabel = display;
+      const display = (rawValue || '').toString().trim();
+      const filters = (display.toUpperCase().match(/[A-Z0-9]+/g) || [])
+        .map(token => token.trim())
+        .filter(token => token && /\d/.test(token));
+      const uniqueFilters = Array.from(new Set(filters));
+      const label = uniqueFilters.length ? display : '';
+      const same = uniqueFilters.length === activeRouteFilters.length
+        && uniqueFilters.every((token, index) => token === activeRouteFilters[index])
+        && label === activeRouteFilterLabel;
+      if (same) return;
+      activeRouteFilters = uniqueFilters;
+      activeRouteFilterLabel = label;
       applyFilterToExistingMarkers();
       refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval());
       pendingImmediateUpdate = true;
@@ -600,7 +597,7 @@
     function currentInterval() {
       const zoom = map.getZoom();
       let interval = zoom >= LABEL_ZOOM_THRESHOLD ? FOCUSED_INTERVAL_MS : DEFAULT_INTERVAL_MS;
-      if (activeRouteFilter) {
+      if (activeRouteFilters.length) {
         interval = Math.min(interval, FILTERED_INTERVAL_MS);
       }
       return interval;
