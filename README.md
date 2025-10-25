@@ -45,6 +45,19 @@ This project is a compact Node.js application that fetches GTFS Realtime data fo
    - `npm run lint` – run ESLint on the Node sources.
    - `npm test` – execute the Node test suite (uses the built-in `node --test`).
 
+## Deployment – Render
+
+1. Commit and push this repository to a Git provider Render can access (GitHub, GitLab, or Bitbucket).
+2. In the Render dashboard choose **New > Web Service** and select the repository. Render will detect the `render.yaml` manifest at the root and pre-populate the service settings.
+3. Confirm the generated values or tweak them as needed:
+   - **Build Command:** `npm install`
+   - **Start Command:** `npm start`
+   - **Environment:** Node 18 (enforced via the `NODE_VERSION` variable and `package.json` engines field).
+4. Provide any secrets for the GTFS feed under **Environment > Environment Variables**. At minimum set `FEED_URL` if you need a custom feed, plus optional tuning flags such as `REFRESH_INTERVAL_MS`, `STALE_AFTER_MS`, and `FETCH_TIMEOUT_MS`.
+5. Click **Create Web Service**. Render will install dependencies, launch `npm start`, and expose the app at the generated URL. Subsequent `git push` operations trigger automatic redeploys.
+
+The supplied `render.yaml` pins a starter instance. Adjust the `plan` or add more environment variables in that file if you need higher concurrency, different regions, or staging environments.
+
 ## How It Works
 
 1. **Feed fetch & decode** – `lib/server.js` uses `fetch()` (with timeouts and exponential backoff) to download the GTFS-RT protobuf, decodes it via `gtfs-realtime-bindings`, and stores the parsed vehicles (id, lat/lon, speed, bearing, routeId, tripId, headsign, etc.). Responses are cached with SHA-1–based ETags so multiple clients reuse the same snapshot.

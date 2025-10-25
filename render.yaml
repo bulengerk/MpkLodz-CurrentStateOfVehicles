@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: mpk-visualization
+    env: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: '18'
+      - key: FEED_URL
+        sync: false
+      - key: REFRESH_INTERVAL_MS
+        value: '30000'
+      - key: FETCH_TIMEOUT_MS
+        value: '10000'
