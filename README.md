@@ -4,9 +4,11 @@ This project is a compact Node.js application that fetches GTFS Realtime data fo
 
 ## Repository Structure
 
-- `package.json` – project metadata and runtime dependencies (`express`, `compression`, `gtfs-realtime-bindings`). The client relies on the global `fetch` API available in Node 18+. If you must use an older Node, install `node-fetch@2` manually and the app will fall back to it.
-- `main.js` – Express server that periodically downloads the `vehicle_positions` feed, decodes it, caches the latest snapshot, and exposes `/positions` as JSON. The feed URL can be overridden with the `FEED_URL` environment variable; otherwise the official Open Data Łódź endpoint is used. Responses are cached in-memory, shared across clients, and served with gzip compression.
-- `public/index.html` – Leaflet-based client. It polls `/positions`, animates the markers, filters by route, offers quick geolocation, and rotates vehicle icons using the reported bearing. The map shows the feed timestamp and data attribution.
+- `package.json` – project metadata, runtime dependencies (`express`, `compression`, `gtfs-realtime-bindings`) and scripts for starting the server, linting, and running Node’s built-in test runner.
+- `main.js` – loads environment configuration and starts the Express app created by `lib/server.js`, wiring in timeouts/backoff settings and static assets.
+- `lib/server.js` – feed refresher and HTTP server factory. Handles GTFS-RT decoding, hashed ETags, stale feed detection, exponential backoff with timeouts, and exposes `/positions` plus a `/healthz` endpoint.
+- `public/index.html` – Leaflet-based client that polls `/positions`, animates markers, filters lines, highlights stale/error states, and shows per-vehicle details.
+- `test/server.test.js` – lightweight Node test harness that exercises the server’s caching, stale detection, and health endpoint.
 - `README.md` – this document.
 
 ## Getting Started
@@ -17,13 +19,19 @@ This project is a compact Node.js application that fetches GTFS Realtime data fo
    ```
 
 2. **Optional configuration**
-   - `FEED_URL` – alternate GTFS-RT vehicle_positions endpoint (HTTP(S) or `file:` URI).
-   - `REFRESH_INTERVAL_MS` – how often the server refreshes the upstream feed (default 30000 ms).
+   - `FEED_URL` – alternate GTFS-RT `vehicle_positions` endpoint (HTTP(S) or `file:` URI).
+   - `REFRESH_INTERVAL_MS` – how often the server refreshes the upstream feed (default 30000 ms, clamped to ≥5000 ms).
+   - `STALE_AFTER_MS` – threshold after which cached data is considered stale and served with HTTP 503 (defaults to `REFRESH_INTERVAL_MS * 4`).
+   - `FETCH_TIMEOUT_MS` – abort upstream requests after this many milliseconds (default 10000).
+   - `MAX_BACKOFF_MS` – upper bound for exponential backoff after repeated failures (default `max(REFRESH_INTERVAL_MS * 8, 5 minutes)`).
 
    Example (Linux/macOS):
    ```bash
    export FEED_URL=https://example.com/vehicle_positions.bin
    export REFRESH_INTERVAL_MS=15000
+   export STALE_AFTER_MS=60000
+   export FETCH_TIMEOUT_MS=8000
+   export MAX_BACKOFF_MS=120000
    ```
 
 3. **Start the server**
@@ -33,11 +41,20 @@ This project is a compact Node.js application that fetches GTFS Realtime data fo
 
    Visit `http://localhost:3000` to open the map. Markers update automatically; use the filter input or geolocation button as needed.
 
+4. **Developer tooling**
+   - `npm run lint` – run ESLint on the Node sources.
+   - `npm test` – execute the Node test suite (uses the built-in `node --test`).
+
 ## How It Works
 
-1. **Feed fetch & decode** – `updateFeed()` in `main.js` uses `fetch()` to download the GTFS-RT protobuf, decodes it via `gtfs-realtime-bindings`, and stores the parsed vehicles (id, lat/lon, speed, bearing, routeId, tripId, headsign, etc.). Responses are cached, and an ETag is emitted so multiple clients reuse the same snapshot.
-2. **API layer** – Express serves `/positions` (JSON) and static assets from `public/`. The endpoint returns a cached payload and honours `If-None-Match` for efficient polling.
-3. **Client rendering** – The Leaflet page centres on Łódź, adds OpenStreetMap tiles, polls `/positions`, and animates markers with smooth interpolation. Popups display line and headsign; icons rotate towards the reported bearing. The interface is responsive, optimised for desktop and mobile.
+1. **Feed fetch & decode** – `lib/server.js` uses `fetch()` (with timeouts and exponential backoff) to download the GTFS-RT protobuf, decodes it via `gtfs-realtime-bindings`, and stores the parsed vehicles (id, lat/lon, speed, bearing, routeId, tripId, headsign, etc.). Responses are cached with SHA-1–based ETags so multiple clients reuse the same snapshot.
+2. **API layer** – Express serves `/positions` (JSON), `/healthz`, and static assets from `public/`. `/positions` returns cached data, honours `If-None-Match`, and emits headers describing staleness and upstream failures. When data exceeds `STALE_AFTER_MS`, clients receive HTTP 503 with warning headers.
+3. **Client rendering** – The Leaflet page centres on Łódź, adds OpenStreetMap tiles, polls `/positions`, and animates markers with smooth interpolation. Dynamic route filtering accepts alphanumeric lines, removes stale markers, and surfaces feed errors/staleness directly in the UI. The interface is responsive, optimised for desktop and mobile.
+
+## Monitoring & Operations
+
+- `/healthz` returns a JSON payload (`ok`, `stalenessMs`, `consecutiveFailures`, `lastError`, etc.) and responds with HTTP 503 when data is stale or the last refresh failed.
+- `/positions` includes headers `X-Feed-Staleness-Ms`, `X-Feed-Stale`, `X-Feed-Error`, and `X-Feed-Warning` to aid external monitoring or alerting.
 
 ## Notes & Next Steps
 

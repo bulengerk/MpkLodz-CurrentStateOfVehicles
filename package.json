@@ -5,11 +5,15 @@
   "main": "main.js",
   "scripts": {
     "start": "node main.js",
-    "test": "echo \"No tests defined\" && exit 0"
+    "test": "node --test",
+    "lint": "eslint ."
   },
   "dependencies": {
     "compression": "^1.7.4",
     "express": "^4.18.2",
     "gtfs-realtime-bindings": "^1.1.1"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
   }
 }

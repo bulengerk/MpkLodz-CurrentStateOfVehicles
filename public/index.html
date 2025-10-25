@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="google-adsense-account" content="ca-pub-1489759204874548">
   <title>MPK Łódź – Pozycje pojazdów w czasie rzeczywistym</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
@@ -29,6 +30,20 @@
       font-size: 11px;
       color: #37474f;
       letter-spacing: 0.2px;
+    }
+
+    #refresh-info.is-stale {
+      color: #ef6c00;
+      font-weight: 600;
+    }
+
+    #refresh-info.has-error {
+      color: #c62828;
+      font-weight: 600;
+    }
+
+    #refresh-info.has-error.is-stale {
+      color: #c62828;
     }
 
     #top-bar {
@@ -88,14 +103,25 @@
       position: relative;
       z-index: 1;
       margin-top: 70px;
+      transition: filter 0.35s ease;
+    }
+
+    body.map-data-stale #map {
+      filter: saturate(0.75) brightness(0.96);
+    }
+
+    body.map-data-error #map {
+      filter: saturate(0.6) brightness(0.9);
     }
 
     .vehicle-marker {
+      position: relative;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: flex-start;
       transform: translate(-50%, -50%);
+      min-width: 36px;
     }
 
     .vehicle-icon {
@@ -115,22 +141,28 @@
     }
 
     .route-label {
+      position: absolute;
+      top: calc(100% - 4px);
+      left: 50%;
+      transform: translate(-50%, 0);
       display: none;
-      margin-top: 2px;
       font-size: 13px;
       font-weight: 700;
       color: #fff;
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
       pointer-events: none;
       line-height: 1;
-      padding: 3px 6px;
+      padding: 4px 8px;
       border-radius: 12px;
-      background: rgba(0, 0, 0, 0.6);
+      background: rgba(33, 33, 33, 0.78);
       white-space: nowrap;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
     }
 
     .map-show-route-labels .route-label {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
 
     #data-attribution {
@@ -287,6 +319,10 @@
     let activeRouteFilterLabel = '';
     let lastETag = null;
     let lastServerTimestamp = null;
+    let lastFeedError = null;
+    let lastFeedWarning = null;
+    let lastStaleFlag = false;
+    let lastStalenessMs = null;
     let userLocationMarker = null;
     const raf = window.requestAnimationFrame
       ? window.requestAnimationFrame.bind(window)
@@ -376,8 +412,8 @@
     function setRouteFilter(rawValue) {
       const display = (rawValue || '').toString().trim();
       const filters = (display.toUpperCase().match(/[A-Z0-9]+/g) || [])
-        .map(token => token.trim())
-        .filter(token => token && /\d/.test(token));
+        .map(token => normalizeRoute(token))
+        .filter(token => token);
       const uniqueFilters = Array.from(new Set(filters));
       const label = uniqueFilters.length ? display : '';
       const same = uniqueFilters.length === activeRouteFilters.length
@@ -387,7 +423,7 @@
       activeRouteFilters = uniqueFilters;
       activeRouteFilterLabel = label;
       applyFilterToExistingMarkers();
-      refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval());
+      updateRefreshInfo();
       pendingImmediateUpdate = true;
       if (!isFetching) updatePositions();
     }
@@ -424,6 +460,18 @@
     ]);
 
     function isTram(vehicle) {
+      if (!vehicle) return false;
+      const typeValue = vehicle.vehicleType ?? vehicle.routeType;
+      if (typeValue != null) {
+        const numericType = Number(typeValue);
+        if (Number.isFinite(numericType)) {
+          if (numericType === 0 || numericType === 11) return true;
+          if (numericType === 3) return false;
+        }
+        const textualType = typeValue.toString().toLowerCase();
+        if (textualType.includes('tram')) return true;
+        if (textualType.includes('bus')) return false;
+      }
       const route = (vehicle.routeId || '').toString().toUpperCase();
       if (route && TRAM_ROUTES.has(route)) return true;
       const label = (vehicle.label || '').toString();
@@ -614,20 +662,42 @@
     }
 
     function formatRefreshInfo(lastSuccess, interval, statusText) {
-      const seconds = Math.round(interval / 1000);
-      let text = `Odświeżanie mapy: co ${seconds} s`;
+      const seconds = Math.max(1, Math.round(interval / 1000));
+      const parts = [`Odświeżanie mapy: co ${seconds} s`];
       if (!lastSuccess) {
-        text += ' | ostatnia aktualizacja: oczekiwanie…';
+        parts.push('ostatnia aktualizacja: oczekiwanie…');
       } else {
-        text += ` | ostatnia aktualizacja: ${lastSuccess.toLocaleTimeString('pl-PL')}`;
+        parts.push(`ostatnia aktualizacja: ${lastSuccess.toLocaleTimeString('pl-PL')}`);
       }
       if (activeRouteFilterLabel) {
-        text += ` | filtr: linia ${activeRouteFilterLabel}`;
+        parts.push(`filtr: linia ${activeRouteFilterLabel}`);
       }
       if (statusText) {
-        text += ` | ${statusText}`;
+        parts.push(statusText);
       }
-      return text;
+      if (lastStaleFlag) {
+        const staleSeconds = lastStalenessMs != null && Number.isFinite(Number(lastStalenessMs))
+          ? Math.max(1, Math.round(Number(lastStalenessMs) / 1000))
+          : null;
+        parts.push(staleSeconds != null
+          ? `dane przeterminowane ~${staleSeconds} s`
+          : 'dane przeterminowane');
+      } else if (lastFeedWarning) {
+        parts.push(lastFeedWarning);
+      }
+      if (lastFeedError) {
+        parts.push(`błąd feedu: ${lastFeedError}`);
+      }
+      return parts.join(' | ');
+    }
+
+    function updateRefreshInfo(statusText, intervalOverride) {
+      const interval = intervalOverride != null ? intervalOverride : currentInterval();
+      refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval, statusText);
+      refreshInfo.classList.toggle('is-stale', lastStaleFlag);
+      refreshInfo.classList.toggle('has-error', Boolean(lastFeedError));
+      document.body.classList.toggle('map-data-stale', lastStaleFlag);
+      document.body.classList.toggle('map-data-error', Boolean(lastFeedError));
     }
 
     function scheduleNextUpdate() {
@@ -638,7 +708,7 @@
     }
 
     let lastSuccessfulUpdate = null;
-    refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval());
+    updateRefreshInfo();
     updateRouteLabelVisibility();
 
     routeFilterInput.addEventListener('keydown', event => {
@@ -666,11 +736,11 @@
 
     locateButton.addEventListener('click', () => {
       if (!navigator.geolocation) {
-        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'geolokalizacja niedostępna');
+        updateRefreshInfo('geolokalizacja niedostępna');
         return;
       }
       locateButton.disabled = true;
-      refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'szukam lokalizacji…');
+      updateRefreshInfo('szukam lokalizacji…');
       navigator.geolocation.getCurrentPosition(position => {
         locateButton.disabled = false;
         const { latitude, longitude, accuracy } = position.coords;
@@ -692,11 +762,11 @@
             fillOpacity: 0.2
           }).addTo(map);
         }
-        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'zlokalizowano');
+        updateRefreshInfo('zlokalizowano');
       }, err => {
         locateButton.disabled = false;
         console.error('Geolocation error:', err);
-        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'lokalizacja niedostępna');
+        updateRefreshInfo('lokalizacja niedostępna');
       }, {
         enableHighAccuracy: true,
         timeout: 10000,
@@ -706,6 +776,7 @@
 
     function applyPositions(data, interval) {
       if (!Array.isArray(data)) return;
+      const seenKeys = new Set();
       data.forEach(vehicle => {
         const key = vehicle.id || vehicle.label || `${vehicle.lat},${vehicle.lon}`;
         if (!key) return;
@@ -730,6 +801,7 @@
           : direction || '';
         const sampleTimestamp = vehicleTimestampMs(vehicle, Date.now());
         const existing = markers[key];
+        seenKeys.add(key);
 
         if (existing) {
           existing.lastVehicle = vehicle;
@@ -796,6 +868,15 @@
         scheduleMotion(entry, latlng, sampleTimestamp, entry.sampleTimestamp, interval);
         entry.sampleTimestamp = sampleTimestamp;
       });
+
+      Object.entries(markers).forEach(([key, entry]) => {
+        if (seenKeys.has(key)) return;
+        if (entry.marker) {
+          entry.marker.remove();
+        }
+        delete markers[key];
+      });
+
       if (lastServerTimestamp) {
         const parsed = Date.parse(lastServerTimestamp);
         lastSuccessfulUpdate = Number.isNaN(parsed) ? new Date() : new Date(parsed);
@@ -811,15 +892,27 @@
       }
       isFetching = true;
       const interval = currentInterval();
-      refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval, 'pobieranie…');
+      updateRefreshInfo('pobieranie…', interval);
       try {
         const options = { cache: 'no-store', headers: {} };
         if (lastETag) {
           options.headers['If-None-Match'] = lastETag;
         }
         const res = await fetch('/positions', options);
+        const feedErrorHeader = res.headers.get('X-Feed-Error');
+        const feedWarningHeader = res.headers.get('X-Feed-Warning');
+        const feedStaleHeader = res.headers.get('X-Feed-Stale');
+        const stalenessHeader = res.headers.get('X-Feed-Staleness-Ms');
+        lastFeedError = feedErrorHeader ? feedErrorHeader : null;
+        lastFeedWarning = feedWarningHeader ? feedWarningHeader : null;
+        lastStaleFlag = feedStaleHeader === 'true';
+        lastStalenessMs = stalenessHeader != null ? Number(stalenessHeader) : null;
+        if (!Number.isFinite(lastStalenessMs)) {
+          lastStalenessMs = null;
+        }
+
         if (res.status === 304) {
-          refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval);
+          updateRefreshInfo(undefined, interval);
           return;
         }
         const data = await res.json();
@@ -827,10 +920,14 @@
         lastServerTimestamp = res.headers.get('X-Feed-Updated-At') || lastServerTimestamp;
         const parsedData = Array.isArray(data) ? data : [];
         applyPositions(parsedData, interval);
-        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, interval);
+        updateRefreshInfo(undefined, interval);
       } catch (err) {
         console.error('Błąd podczas pobierania pozycji pojazdów:', err);
-        refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval(), 'błąd pobierania');
+        lastFeedWarning = null;
+        lastStaleFlag = false;
+        lastStalenessMs = null;
+        lastFeedError = err && err.message ? err.message : 'błąd pobierania';
+        updateRefreshInfo('błąd pobierania');
       } finally {
         isFetching = false;
         if (pendingImmediateUpdate) {
@@ -844,7 +941,7 @@
 
     map.on('zoomend', () => {
       updateRouteLabelVisibility();
-      refreshInfo.textContent = formatRefreshInfo(lastSuccessfulUpdate, currentInterval());
+      updateRefreshInfo();
       updatePositions();
     });
 
