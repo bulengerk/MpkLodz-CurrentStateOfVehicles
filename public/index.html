@@ -18,6 +18,10 @@
       background: #f5f5f5;
     }
 
+    :root {
+      --mobile-header-height: 0px;
+    }
+
     #map {
       position: relative;
       z-index: 1;
@@ -55,6 +59,7 @@
       display: flex;
       justify-content: center;
       pointer-events: none;
+      box-sizing: border-box;
     }
 
     #brand-logo {
@@ -260,47 +265,84 @@
     }
 
     @media (max-width: 640px) {
-      #brand-logo {
-        left: 50%;
-        top: 2px;
-        transform: translate(-50%, 0);
+      :root {
+        --mobile-header-height: 106px;
       }
-      #brand-logo svg {
-        width: 118px;
+      html {
+        height: 100vh;
+        overflow: hidden;
+      }
+      body {
+        height: 100vh;
+        overflow: hidden;
+        position: relative;
+      }
+      #map {
+        position: absolute;
+        top: var(--mobile-header-height);
+        left: 0;
+        right: 0;
+        margin: 0;
+        height: calc(100vh - var(--mobile-header-height));
+        min-height: calc(100vh - var(--mobile-header-height));
       }
       #top-bar {
-        justify-content: stretch;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: var(--mobile-header-height);
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: center;
+        gap: 3px;
+        background: rgba(93, 59, 47, 0.96);
+        padding: 7px 0 8px;
+        pointer-events: auto;
+        box-sizing: border-box;
+      }
+      #brand-logo {
+        position: static;
+        transform: none;
+        margin: 0 auto 2px;
+        width: 100%;
+        display: flex;
+        justify-content: center;
+        pointer-events: none;
+      }
+      #brand-logo svg {
+        height: 28px;
+        width: auto;
       }
       #controls {
-        margin: 38px auto 0;
+        margin: 0 auto;
+        width: 100%;
+        max-width: min(300px, calc(100% - 18px));
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         align-items: center;
-        gap: 8px 6px;
-        padding: 10px 14px 12px;
-        border-radius: 18px;
-        max-width: min(300px, calc(100% - 20px));
-        background: rgba(93, 59, 47, 0.94);
-        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+        gap: 6px 6px;
+        padding: 0 10px 3px;
+        background: transparent;
+        box-shadow: none;
+        pointer-events: auto;
       }
       #controls input {
-        width: 100%;
-        padding: 7px 10px;
-        border-radius: 999px;
-        font-size: 12px;
         grid-column: 1 / -1;
+        width: 100%;
+        padding: 4px 10px;
+        border-radius: 18px;
+        font-size: 10px;
         border: 1px solid rgba(244, 232, 206, 0.55);
         background: rgba(255, 255, 255, 0.98);
       }
       #controls button {
         width: 100%;
-        padding: 7px 0;
-        border-radius: 999px;
-        font-size: 11px;
+        padding: 4px 0;
+        border-radius: 18px;
+        font-size: 9px;
         letter-spacing: 0.4px;
-      }
-      #map {
-        margin-top: 110px;
       }
       #data-attribution {
         left: 50%;
@@ -311,6 +353,7 @@
         text-align: center;
         font-size: 9px;
         line-height: 1.2;
+        bottom: 8px;
       }
       #data-attribution .legend {
         grid-template-columns: repeat(2, minmax(0, 1fr));
