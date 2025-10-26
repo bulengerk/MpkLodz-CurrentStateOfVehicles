@@ -28,22 +28,22 @@
       display: block;
       margin-top: 4px;
       font-size: 11px;
-      color: #37474f;
+      color: #f9efd4;
       letter-spacing: 0.2px;
     }
 
     #refresh-info.is-stale {
-      color: #ef6c00;
+      color: #ffcc80;
       font-weight: 600;
     }
 
     #refresh-info.has-error {
-      color: #c62828;
+      color: #ff8a80;
       font-weight: 600;
     }
 
     #refresh-info.has-error.is-stale {
-      color: #c62828;
+      color: #ff8a80;
     }
 
     #top-bar {
@@ -117,8 +117,8 @@
       padding: 6px 12px;
       border: none;
       border-radius: 999px;
-      background: #1b5e20;
-      color: #fff;
+      background: #5d3b2f;
+      color: #f4e8ce;
       cursor: pointer;
       font-size: 12px;
       transition: background 0.2s ease;
@@ -126,8 +126,13 @@
       white-space: nowrap;
     }
 
+    #controls input,
+    #controls button {
+      box-sizing: border-box;
+    }
+
     #controls button:hover {
-      background: #145316;
+      background: #4b3026;
     }
 
     #map {
@@ -202,19 +207,19 @@
       right: 10px;
       z-index: 1000;
       padding: 4px 8px;
-      background: rgba(255, 255, 255, 0.85);
-      color: #263238;
+      background: rgba(75, 48, 38, 0.92);
+      color: #f4e8ce;
       border-radius: 6px;
       font-size: 10px;
-      box-shadow: 0 1px 5px rgba(0, 0, 0, 0.1);
+      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.2);
       line-height: 1.3;
       min-width: 140px;
     }
 
     #data-attribution a {
-      color: inherit;
+      color: #f9efd4;
       text-decoration: none;
-      border-bottom: 1px dotted currentColor;
+      border-bottom: 1px dotted rgba(249, 239, 212, 0.8);
     }
 
     #data-attribution a:hover {
@@ -250,35 +255,52 @@
       background: #60738f;
     }
 
+    .legend-item {
+      color: #f4e8ce;
+    }
+
     @media (max-width: 640px) {
+      #brand-logo {
+        left: 50%;
+        top: 2px;
+        transform: translate(-50%, 0);
+      }
+      #brand-logo svg {
+        width: 118px;
+      }
       #top-bar {
         justify-content: stretch;
       }
       #controls {
-        margin: 2px auto 0;
-        flex-direction: column;
+        margin: 38px auto 0;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         align-items: center;
-        gap: 2px;
-        padding: 3px 7px;
-        border-radius: 12px;
-        max-width: min(220px, calc(100% - 24px));
-        background: rgba(255, 255, 255, 0.82);
-        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+        gap: 8px 6px;
+        padding: 10px 14px 12px;
+        border-radius: 18px;
+        max-width: min(300px, calc(100% - 20px));
+        background: rgba(93, 59, 47, 0.94);
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
       }
       #controls input {
         width: 100%;
-        padding: 4px 7px;
-        border-radius: 10px;
-        font-size: 11px;
+        padding: 7px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        grid-column: 1 / -1;
+        border: 1px solid rgba(244, 232, 206, 0.55);
+        background: rgba(255, 255, 255, 0.98);
       }
       #controls button {
         width: 100%;
-        padding: 4px 7px;
-        border-radius: 10px;
-        font-size: 10px;
+        padding: 7px 0;
+        border-radius: 999px;
+        font-size: 11px;
+        letter-spacing: 0.4px;
       }
       #map {
-        margin-top: 85px;
+        margin-top: 110px;
       }
       #data-attribution {
         left: 50%;
