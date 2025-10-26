@@ -57,6 +57,37 @@
       pointer-events: none;
     }
 
+    #brand-logo {
+      position: absolute;
+      left: 16px;
+      top: 10px;
+      pointer-events: none;
+      z-index: 1001;
+    }
+
+    #brand-logo svg {
+      width: 150px;
+      height: auto;
+      display: block;
+      filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2));
+    }
+
+    #brand-logo svg text.logo-main {
+      font-family: 'Georgia', serif;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: 2.6px;
+      fill: #f4e8ce;
+    }
+
+    #brand-logo svg text.logo-kicker {
+      font-family: 'Trebuchet MS', 'Gill Sans', sans-serif;
+      font-size: 7.5px;
+      letter-spacing: 4.6px;
+      fill: #d8c59a;
+      text-transform: uppercase;
+    }
+
     #controls {
       margin: 12px auto 0;
       display: inline-flex;
@@ -271,6 +302,21 @@
 </head>
 <body>
   <div id="top-bar">
+    <div id="brand-logo">
+      <svg viewBox="0 0 180 60" role="img" aria-labelledby="tlodz-logo-title">
+        <title id="tlodz-logo-title">tlodz.pl logotyp</title>
+        <defs>
+          <linearGradient id="logo-bg-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#4b3026"></stop>
+            <stop offset="100%" stop-color="#2f1f17"></stop>
+          </linearGradient>
+        </defs>
+        <rect x="0" y="0" width="180" height="60" rx="10" fill="url(#logo-bg-gradient)"></rect>
+        <rect x="8" y="8" width="164" height="44" rx="8" fill="#5d3b2f" stroke="#f4e8ce" stroke-width="3"></rect>
+        <text x="90" y="30" text-anchor="middle" dominant-baseline="middle" class="logo-main">tlodz.pl</text>
+        <text x="90" y="46" text-anchor="middle" dominant-baseline="middle" class="logo-kicker">TRAM &amp; BUS RADAR</text>
+      </svg>
+    </div>
     <div id="controls">
       <input id="route-filter" type="text" placeholder="np. 52 lub 1" autocomplete="off">
       <button id="clear-route-filter" type="button">Pokaż wszystkie</button>
